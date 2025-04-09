@@ -1,8 +1,11 @@
 import streamlit as st
 import requests
 import pandas as pd
+from io import BytesIO
 
-st.title("🏀 NBA Player Props from Stake.com")
+st.set_page_config(page_title="NBA Player Prop Odds", layout="wide")
+
+st.title("🏀 NBA Player Prop Odds from Stake.com")
 
 graphql_url = "https://stake.com/_api/graphql"
 
@@ -25,16 +28,30 @@ fixture_query = {
     """
 }
 
+# Send request to fetch fixtures
 resp = requests.post(graphql_url, json=fixture_query)
-fixtures = resp.json()['data']['slugTournament']['fixtures']
 
-st.subheader("Upcoming NBA Games")
-for f in fixtures:
-    st.write(f"{f['name']} - ID: {f['id']}")
+if resp.status_code != 200:
+    st.error(f"❌ Failed to fetch fixtures. HTTP Status Code: {resp.status_code}")
+    st.stop()
 
-# Step 2: Use one event ID to get player odds (replace with any from above)
-event_id = fixtures[0]['id']  # Example: use the first one
+try:
+    fixtures_data = resp.json()
+    if 'data' not in fixtures_data or 'slugTournament' not in fixtures_data['data']:
+        raise KeyError("Invalid response structure from Stake.com.")
+    
+    fixtures = fixtures_data['data']['slugTournament']['fixtures']
+except Exception as e:
+    st.error("❌ Failed to parse fixtures data from Stake.com.")
+    st.code(str(e))
+    st.stop()
 
+# Create a dropdown for selecting a fixture (game)
+fixture_options = {f["name"]: f["id"] for f in fixtures}
+selected_fixture = st.selectbox("Select a Game", list(fixture_options.keys()))
+event_id = fixture_options[selected_fixture]
+
+# Step 2: Fetch markets for the selected event
 market_query = {
     "operationName": "EventMarkets",
     "variables": {
@@ -57,11 +74,26 @@ market_query = {
 }
 
 market_resp = requests.post(graphql_url, json=market_query)
-markets = market_resp.json()['data']['event']['markets']
 
-# Filter only player props
+if market_resp.status_code != 200:
+    st.error(f"❌ Failed to fetch markets. HTTP Status Code: {market_resp.status_code}")
+    st.stop()
+
+try:
+    market_data = market_resp.json()
+    if 'data' not in market_data or 'event' not in market_data['data']:
+        raise KeyError("Invalid response structure for market data.")
+    
+    markets = market_data['data']['event']['markets']
+except Exception as e:
+    st.error("❌ Failed to retrieve player odds for the selected fixture.")
+    st.code(str(e))
+    st.stop()
+
+# Step 3: Filter only player props markets
 player_markets = [m for m in markets if "Player" in m['name'] or "Points" in m['name']]
 
+# Step 4: Prepare data for display and export
 data = []
 for market in player_markets:
     for outcome in market['outcomes']:
@@ -71,5 +103,29 @@ for market in player_markets:
             "Odds": outcome['odds']
         })
 
-df = pd.DataFrame(data)
-st.dataframe(df)
+if data:
+    # Convert data to a DataFrame
+    df = pd.DataFrame(data)
+    
+    # Display the data in Streamlit
+    st.subheader(f"Player Props for: {selected_fixture}")
+    st.dataframe(df)
+
+    # Export the data to an Excel file
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name="Player Odds", index=False)
+        writer.save()
+    
+    output.seek(0)
+
+    # Add a download button for the Excel file
+    st.download_button(
+        label="📥 Download as Excel",
+        data=output,
+        file_name=f"{selected_fixture}_player_odds.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+else:
+    # Show a warning if no player props are available
+    st.warning("No player prop odds found for this game.")
