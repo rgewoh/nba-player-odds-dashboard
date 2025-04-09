@@ -32,9 +32,12 @@ resp = requests.post(graphql_url, json=fixture_query)
 
 try:
     fixtures_data = resp.json()
+    st.subheader("Debug: Raw Fixture Response")
+    st.json(fixtures_data)  # 👈 shows entire response in Streamlit
     fixtures = fixtures_data['data']['slugTournament']['fixtures']
-except (ValueError, KeyError):
-    st.error("Failed to parse fixtures data from Stake.com. Please try again later.")
+except Exception as e:
+    st.error("❌ Failed to parse fixtures data from Stake.com.")
+    st.code(str(e))
     st.stop()
 
 fixture_options = {f["name"]: f["id"] for f in fixtures}
